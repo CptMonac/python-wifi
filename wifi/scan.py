@@ -113,8 +113,13 @@ def normalize(cell_block):
                 while lines and lines[0].startswith(' ' * 4):
                     values.append(lines.pop(0).strip())
 
-                if 'WPA2' in value:
-                    cell.encryption_type = 'wpa2'
+                for word in values:
+                    if 'WPA2' in word:
+                        cell.encryption_type = 'wpa2-?'
+                    elif 'PSK' in word:
+                        cell.encryption_type = 'wpa2-psk'
+                    elif '802.1x' in word:
+                        cell.encryption_type = 'wpa2-eap'
             elif key in normalize_value:
                 setattr(cell, key, normalize_value[key](value))
     return cell

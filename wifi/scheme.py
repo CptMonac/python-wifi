@@ -2,10 +2,11 @@ import re
 import itertools
 
 import wifi.subprocess_compat as subprocess
+import wpactrl
 from wifi.pbkdf2 import pbkdf2_hex
 
 
-def configuration(cell, passkey=None):
+def configuration(cell, passkey=None, username=None):
     """
     Returns a dictionary of configuration options for cell
 
@@ -17,12 +18,19 @@ def configuration(cell, passkey=None):
             'wireless-channel': 'auto',
         }
     else:
-        if cell.encryption_type == 'wpa2':
+        if (cell.encryption_type == 'wpa2-?') or (cell.encryption_type == 'wpa2-psk'):
             if len(passkey) != 64:
                 passkey = pbkdf2_hex(passkey, cell.ssid, 4096, 32)
 
             return {
                 'wpa-ssid': cell.ssid,
+                'wpa-psk': passkey,
+                'wireless-channel': 'auto',
+            }
+        elif (cell.encryption_type == 'wpa2-eap'):
+            return {
+                'wpa-ssid': cell.ssid,
+                'wpa-username': username,
                 'wpa-psk': passkey,
                 'wireless-channel': 'auto',
             }
@@ -80,12 +88,12 @@ class Scheme(object):
             return None
 
     @classmethod
-    def for_cell(cls, interface, name, cell, passkey=None):
+    def for_cell(cls, interface, name, cell, passkey=None, username=None):
         """
         Intuits the configuration needed for a specific
         :class:`Cell` and creates a :class:`Scheme` for it.
         """
-        return cls(interface, name, configuration(cell, passkey))
+        return cls(interface, name, configuration(cell, passkey, username))
 
     def save(self):
         """
