@@ -13,7 +13,8 @@ def configuration(cell, passkey=None, username=None):
     Asks for a password if necessary
     """
     if not cell.encrypted:
-        return {
+        return
+        {
             'wireless-essid': cell.ssid,
             'wireless-channel': 'auto',
         }
@@ -29,10 +30,17 @@ def configuration(cell, passkey=None, username=None):
             }
         elif (cell.encryption_type == 'wpa2-eap'):
             return {
-                'wpa-ssid': cell.ssid,
-                'wpa-username': username,
-                'wpa-psk': passkey,
-                'wireless-channel': 'auto',
+                'ssid': '"'+cell.ssid+'"',
+                'key_mgmt': 'WPA-EAP',
+                'scan_ssid': '1',
+                'proto': 'RSN',
+                'pairwise': 'CCMP TKIP',
+                'group': 'CCMP TKIP',
+                'eap': 'PEAP',
+                'phase1': '"peapver=0"'
+                'phase2': '"MSCHAPV2"'
+                'identity': '"'+username+'"',
+                'password': '"'+passkey+'"',
             }
         else:
             raise NotImplementedError
@@ -47,19 +55,27 @@ class Scheme(object):
 
     interfaces = '/etc/network/interfaces'
 
-    def __init__(self, interface, name, options=None):
+    def __init__(self, interface, name, options=None,encryption_type=None):
         self.interface = interface
         self.name = name
         self.options = options or {}
+        self.encryption_type = encryption_type
 
     def __str__(self):
         """
         Returns the representation of a scheme that you would need
         in the /etc/network/interfaces file.
         """
-        iface = "iface {interface}-{name} inet dhcp".format(**vars(self))
-        options = ''.join("\n    {k} {v}".format(k=k, v=v) for k, v in self.options.items())
-        return iface + options + '\n'
+        if self.encryption_type == 'wpa2-eap':
+            iface = "auto {interface}\n".format(**vars(self))
+            iface += "iface {interface} inet dhcp\n".format(**vars(self))
+            iface += ''.join("\t pre-up wpa_supplicant -Bw -Dwext -i {interface} -c/etc/wpa_supplicant_enterprise.conf\n")
+            iface += ''.join("\t post-down killall -q wpa_supplicant")
+            return iface
+        else:
+            iface = "iface {interface} inet dhcp".format(**vars(self))
+            options = ''.join("\n    {k} {v}".format(k=k, v=v) for k, v in self.options.items())
+            return iface + options + '\n'
 
     def __repr__(self):
         return 'Scheme(interface={interface!r}, name={name!r}, options={options!r}'.format(**vars(self))
@@ -93,17 +109,33 @@ class Scheme(object):
         Intuits the configuration needed for a specific
         :class:`Cell` and creates a :class:`Scheme` for it.
         """
-        return cls(interface, name, configuration(cell, passkey, username))
+        if cell.encrypted:
+            return cls(interface, name, configuration(cell, passkey, username), cell.encryption_type)
+        else:
+            return cls(interface, name, configuration(cell, passkey, username))
+
 
     def save(self):
         """
         Writes the configuration to the :attr:`interfaces` file.
+        If WPA-EAP network, also write to /etc/wpa_supplicant_enterprise.conf
         """
         assert not Scheme.find(self.interface, self.name)
-
-        with open(self.interfaces, 'a') as f:
-            f.write('\n')
-            f.write(str(self))
+        
+        #Adapted from Ubuntu 802.1x Authentication page: https://help.ubuntu.com/community/Network802.1xAuthentication
+        if self.encryption_type == 'wpa2-eap':
+            configuration_file = '/etc/wpa_supplicant_enterprise.conf'
+            with open(configuration_file, 'a') as config_file:
+                config_file.write('ctrl_interface=/var/run/wpa_supplicant_enterprise\n')
+                config_file.write('ctrl_interface)group=0\n')
+                config_file.write('eapol_version=2\n')
+                config_file.write('ap_scan=0\n')
+                options = ''.join("\n{k}={v}".format(k=k, v=v) for k, v in test_dic.items())
+                config_file.write(options[1:])
+        else:
+            with open(self.interfaces, 'a') as f:
+                f.write('\n')
+                f.write(str(self))
 
     @property
     def iface(self):
@@ -119,8 +151,15 @@ class Scheme(object):
         """
         Connects to the network as configured in this scheme.
         """
-        subprocess.check_call(['/sbin/ifdown', self.interface])
-        subprocess.check_call(['/sbin/ifup'] + self.as_args())
+        if self.encryption_type == 'wpa2-eap':
+            response = subprocess.check_output(['wpa_supplicant', '-B', '-i', self.interface, '-Dwext', '-c', '/etc/wpa_supplicant_enterprise.conf'])
+            if ("Authentication succeeded" in response) or ("EAP authentication completed successfully" in response):
+                print 'Wi-Fi Connection established!'
+            else:
+                print 'Could not connect to Wi-Fi network!'
+        else:
+            subprocess.check_call(['/sbin/ifdown', self.interface])
+            subprocess.check_call(['/sbin/ifup'] + self.as_args())
 
 
 # TODO: support other interfaces
